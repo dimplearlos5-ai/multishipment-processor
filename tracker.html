@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AI Multishipment Processor</title>
+  <style>
+    :root {
+      --bg: #0b1220;
+      --card: #111a2b;
+      --muted: #8fa2b6;
+      --primary: #1e90ff;
+      --success: #28a745;
+      --warning: #f1c40f;
+      --error: #e74c3c;
+      --international: #a55eea;
+      --border: #2e3a58;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, system-ui, -apple-system, Arial, sans-serif;
+      background: linear-gradient(#0b1220, #0b1220 60%, #0e1730);
+      color: #e6f0ff;
+      padding: 28px;
+    }
+    .card {
+      max-width: 1300px;
+      margin: 0 auto;
+      background: linear-gradient(#141e31, #0f1624);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px 24px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.25);
+    }
+    h1 { font-size: 1.4rem; margin: 0 0 8px; }
+    p { color: var(--muted); margin: 6px 0 16px; }
+    
+    .upload-area {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 20px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .btn {
+      background: var(--primary);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 10px 16px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    .btn:hover { opacity: 0.8; }
+    
+    #search-bar {
+      padding: 10px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: #1b2a45;
+      color: white;
+      min-width: 250px;
+    }
+
+    .file-name {
+      font-family: ui-monospace;
+      background: rgba(30,144,255,.15);
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      max-height: 600px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 1000px;
+    }
+    thead th {
+      background: #1b2a45;
+      padding: 12px;
+      font-size: 13px;
+      text-align: left;
+      position: sticky;
+      top: 0;
+    }
+    tbody td {
+      padding: 12px;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+    }
+    .empty { text-align: center; color: var(--muted); padding: 40px; }
+
+    /* AI Highlighting Styles */
+    .risk-split { background: rgba(231, 76, 60, 0.2) !important; }
+    .risk-pending { background: rgba(241, 196, 15, 0.15) !important; }
+    .risk-intl { background: rgba(165, 94, 234, 0.2) !important; }
+  </style>
+</head>
+<body>
+
+  <div class="card">
+    <h1>AI Multishipment Tracker Processor</h1>
+    <p>Upload your Channel Advisor export, then match with Tracking CSVs to find anomalies.</p>
+
+    <div class="upload-area">
+      <input type="file" id="file-input" accept=".csv" style="display:none" />
+      <button id="import-btn" class="btn">1. Import Main CSV</button>
+
+      <input type="file" id="tracking-input" accept=".csv" style="display:none" />
+      <button id="tracking-btn" class="btn">2. Match Tracking</button>
+
+      <button id="ai-scan-btn" class="btn" style="background: #6f42c1;">3. AI Scan Issues</button>
+      <button id="export-btn" class="btn" style="background: var(--success);">4. Export Results</button>
+
+      <input type="text" id="search-bar" placeholder="Search Order, SKU or Carrier...">
+      
+      <span id="status" class="status" style="margin-left: auto; font-weight: bold;">Ready</span>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Order Number</th>
+            <th>SKU</th>
+            <th>Date posted</th>
+            <th>Posted by</th>
+            <th>Tracking Number 1</th>
+            <th>Tracking Number 2</th>
+            <th>Tracking Number 3</th>
+            <th>Emailed by</th>
+          </tr>
+        </thead>
+        <tbody id="data-body">
+          <tr id="empty-row">
+            <td colspan="8" class="empty">No data loaded. Start by importing your main CSV file.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+<script>
+/** * CSV Parser 
+ */
+function parseCSV(text) {
+  const rows = [];
+  let row = [];
+  let field = '';
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"') {
+      if (inQuotes && text[i + 1] === '"') { field += '"'; i++; } 
+      else { inQuotes = !inQuotes; }
+    } else if (c === ',' && !inQuotes) { row.push(field); field = ''; } 
+    else if ((c === '\n' || c === '\r') && !inQuotes) {
+      if (c === '\r' && text[i + 1] === '\n') i++;
+      row.push(field); rows.push(row); row = []; field = '';
+    } else { field += c; }
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+function getIndex(headers, name) {
+  return headers.findIndex(h => String(h).trim().toLowerCase() === name.toLowerCase());
+}
+
+function safeValue(row, index) {
+  return index >= 0 && index < row.length ? row[index] : '';
+}
+
+/** * Carrier Logic - Detects company from number 
+ */
+function formatTrackingNumber(value) {
+  const tracking = String(value || '').trim();
+  if (!tracking || tracking.toLowerCase() === 'pending') return '***pending***';
+  const upper = tracking.toUpperCase();
+
+  if (/^1Z/i.test(upper)) return `UPS: ${tracking}`;
+  if (/^TBA/i.test(upper)) return `AMZL: ${tracking}`;
+  if (/^KP/i.test(upper)) return `MEYER: ${tracking}`;
+  if (/^\d{22}$/.test(tracking)) return tracking.startsWith('926') ? `FedEx: ${tracking}` : `USPS: ${tracking}`;
+  if (/^\d{12}$/.test(tracking)) return `FedEx: ${tracking}`;
+  if (/^D/i.test(upper) || /^1L/i.test(upper)) return `OnTrac: ${tracking}`;
+  
+  return tracking;
+}
+
+// Elements
+const fileInput = document.getElementById('file-input');
+const importBtn = document.getElementById('import-btn');
+const trackingInput = document.getElementById('tracking-input');
+const trackingBtn = document.getElementById('tracking-btn');
+const aiScanBtn = document.getElementById('ai-scan-btn');
+const exportBtn = document.getElementById('export-btn');
+const searchBar = document.getElementById('search-bar');
+const statusSpan = document.getElementById('status');
+const tbody = document.getElementById('data-body');
+
+// 1. Import Main File
+importBtn.onclick = () => fileInput.click();
+fileInput.onchange = (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  statusSpan.textContent = 'Processing Main File...';
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    const rows = parseCSV(ev.target.result || '');
+    const headers = rows[0] || [];
+    
+    // Mapping common headers from your specific files
+    const idxOrder = getIndex(headers, 'Order Number') !== -1 ? getIndex(headers, 'Order Number') : getIndex(headers, 'Site Order ID');
+    const idxSKU = getIndex(headers, 'SKU');
+    const idxDate = getIndex(headers, 'Date posted');
+    const idxUser = getIndex(headers, 'Posted by');
+    const idxT1 = getIndex(headers, 'Tracking Number 1') !== -1 ? getIndex(headers, 'Tracking Number 1') : 4; // Default to column 5 for that corrupted header
+
+    tbody.innerHTML = '';
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i];
+      if (row.length < 2) continue;
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${safeValue(row, idxOrder)}</td>
+        <td>${safeValue(row, idxSKU)}</td>
+        <td>${safeValue(row, idxDate)}</td>
+        <td>${safeValue(row, idxUser)}</td>
+        <td>${formatTrackingNumber(safeValue(row, idxT1))}</td>
+        <td>***pending***</td>
+        <td></td>
+        <td></td>
+      `;
+      tbody.appendChild(tr);
+    }
+    statusSpan.textContent = `Loaded ${rows.length - 1} orders.`;
+  };
+  reader.readAsText(file);
+};
+
+// 2. Match Tracking File
+trackingBtn.onclick = () => trackingInput.click();
+trackingInput.onchange = (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  statusSpan.textContent = 'Matching...';
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    const rows = parseCSV(ev.target.result || '');
+    const headers = rows[0] || [];
+    const idxPurchasedSKU = getIndex(headers, 'Purchased SKU') !== -1 ? getIndex(headers, 'Purchased SKU') : getIndex(headers, 'SKU');
+    const idxT1 = getIndex(headers, 'Tracking Number');
+    
+    const map = {};
+    for (let i = 1; i < rows.length; i++) {
+      const sku = String(safeValue(rows[i], idxPurchasedSKU)).trim();
+      if (sku) map[sku] = formatTrackingNumber(safeValue(rows[i], idxT1));
+    }
+
+    const tableRows = tbody.querySelectorAll('tr');
+    tableRows.forEach(row => {
+      const sku = row.children[1].textContent.trim();
+      if (map[sku]) {
+          row.children[5].textContent = map[sku]; // Update Tracking 2
+      }
+    });
+    statusSpan.textContent = 'Tracking Matched.';
+  };
+  reader.readAsText(file);
+};
+
+// 3. AI Scan
+aiScanBtn.onclick = () => {
+  const rows = tbody.querySelectorAll('tr:not(#empty-row)');
+  let count = 0;
+  rows.forEach(row => {
+    const t1 = row.children[4].textContent;
+    const t2 = row.children[5].textContent;
+    const sku = row.children[1].textContent;
+
+    // Reset styles
+    row.className = '';
+
+    // Logic A: Split Shipment Risk (FedEx/UPS with no second track)
+    if ((t1.includes('FedEx') || t1.includes('UPS')) && t2.includes('pending')) {
+      row.classList.add('risk-split');
+      count++;
+    } 
+    // Logic B: International Detection (Common in your USAUTO file)
+    else if (sku.includes('USA-') && t1.includes('pending')) {
+      row.classList.add('risk-intl');
+      count++;
+    }
+  });
+  statusSpan.textContent = `AI Scan: ${count} issues flagged.`;
+};
+
+// 4. Export
+exportBtn.onclick = () => {
+  let csv = [];
+  const rows = document.querySelectorAll("table tr");
+  rows.forEach(r => {
+    let row = [];
+    r.querySelectorAll("td, th").forEach(c => row.push(`"${c.textContent}"`));
+    csv.push(row.join(","));
+  });
+  const blob = new Blob([csv.join("\n")], { type: 'text/csv' });
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.setAttribute('href', url);
+  a.setAttribute('download', 'AI_Processed_Shipments.csv');
+  a.click();
+};
+
+// Search Logic
+searchBar.onkeyup = () => {
+  const val = searchBar.value.toLowerCase();
+  tbody.querySelectorAll('tr').forEach(r => {
+    r.style.display = r.textContent.toLowerCase().includes(val) ? '' : 'none';
+  });
+};
+</script>
+</body>
+</html>
